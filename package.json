@@ -1,0 +1,23 @@
+{
+  "name": "smartassign",
+  "private": true,
+  "version": "1.0.0",
+  "description": "SmartAssign — интеллектуальная информационная система распределения задач сотрудникам",
+  "type": "module",
+  "workspaces": ["server", "web"],
+  "scripts": {
+    "dev": "npm-run-all --parallel dev:server dev:web",
+    "dev:server": "npm run dev -w server",
+    "dev:web": "npm run dev -w web",
+    "build": "npm run build -w web",
+    "start": "npm run start -w server",
+    "seed": "npm run seed -w server",
+    "test": "npm test -w server",
+    "typecheck": "npm run typecheck -w server && npm run typecheck -w web",
+    "bench": "npm run bench -w server"
+  },
+  "devDependencies": {
+    "npm-run-all2": "^8.0.4"
+  },
+  "engines": { "node": ">=24" }
+}

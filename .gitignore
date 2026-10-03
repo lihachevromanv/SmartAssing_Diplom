@@ -1,0 +1,29 @@
+# Зависимости
+node_modules/
+
+# Сборка клиентской части
+web/dist/
+*.tsbuildinfo
+
+# База данных SQLite (создаётся командой npm run seed или при первом запуске)
+server/data/
+*.db
+*.db-wal
+*.db-shm
+*.sqlite
+
+# Переменные окружения и секреты
+.env
+.env.*
+!.env.example
+
+# Журналы
+*.log
+npm-debug.log*
+
+# Файлы операционных систем и редакторов
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp

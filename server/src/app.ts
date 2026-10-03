@@ -29,17 +29,95 @@ declare module '@fastify/jwt' {
 
 const here = dirname(fileURLToPath(import.meta.url));
 
+/** Русские сообщения проверки входных данных (вместо англоязычных сообщений по умолчанию). */
+z.config({
+  customError: (iss) => {
+    switch (iss.code) {
+      case 'invalid_type':
+        return iss.input === undefined || iss.input === null ? 'Поле обязательно для заполнения' : 'Некорректный тип значения';
+      case 'too_small':
+        if (iss.origin === 'string') return `Минимальная длина – ${iss.minimum} симв.`;
+        if (iss.origin === 'array') return `Нужно указать не менее ${iss.minimum} элементов`;
+        return iss.inclusive ? `Значение должно быть не меньше ${iss.minimum}` : `Значение должно быть больше ${iss.minimum}`;
+      case 'too_big':
+        if (iss.origin === 'string') return `Максимальная длина – ${iss.maximum} симв.`;
+        if (iss.origin === 'array') return `Допускается не более ${iss.maximum} элементов`;
+        return iss.inclusive ? `Значение должно быть не больше ${iss.maximum}` : `Значение должно быть меньше ${iss.maximum}`;
+      case 'invalid_format':
+        return iss.format === 'email' ? 'Некорректный адрес электронной почты' : 'Некорректный формат значения';
+      case 'invalid_value':
+        return 'Недопустимое значение';
+      default:
+        return 'Некорректное значение';
+    }
+  },
+});
+
+class ValidationFailure extends Error {
+  details: string[];
+  constructor(details: string[]) {
+    super(details.join('; '));
+    this.details = details;
+  }
+}
+
+const FIELD_LABELS: Record<string, string> = {
+  title: 'Название',
+  description: 'Описание',
+  priority: 'Приоритет',
+  estimateHours: 'Трудоёмкость',
+  actualHours: 'Фактические трудозатраты',
+  deadline: 'Срок',
+  requirements: 'Требования к навыкам',
+  minLevel: 'Минимальный уровень',
+  skillId: 'Навык',
+  level: 'Уровень навыка',
+  skills: 'Навыки',
+  email: 'Электронная почта',
+  password: 'Пароль',
+  name: 'ФИО',
+  role: 'Роль',
+  position: 'Должность',
+  capacityHoursWeek: 'Недельная ёмкость',
+  available: 'Доступность',
+  status: 'Статус',
+  employeeId: 'Сотрудник',
+  category: 'Категория',
+  taskIds: 'Список задач',
+  mode: 'Режим',
+  apply: 'Применение',
+  skill: 'Вес «Навыки»',
+  load: 'Вес «Загрузка»',
+  speed: 'Вес «Скорость»',
+  reliability: 'Вес «Надёжность»',
+  seed: 'Начальное значение',
+  employees: 'Число сотрудников',
+  tasks: 'Число задач',
+  runs: 'Число прогонов',
+};
+
 const idParam = z.object({ id: z.coerce.number().int().positive() });
 const reqSchema = z.object({ skillId: z.number().int().positive(), minLevel: z.number().int().min(1).max(5) });
-const dateSchema = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Ожидается дата в формате ГГГГ-ММ-ДД');
+const dateSchema = z
+  .string()
+  .regex(/^\d{4}-\d{2}-\d{2}$/, 'Ожидается дата в формате ГГГГ-ММ-ДД')
+  .refine((v) => {
+    const d = new Date(`${v}T00:00:00Z`);
+    return !Number.isNaN(d.getTime()) && d.toISOString().slice(0, 10) === v;
+  }, 'Такой даты не существует')
+  .refine((v) => Number(v.slice(0, 4)) >= 2000 && Number(v.slice(0, 4)) <= 2100, 'Год должен быть от 2000 до 2100');
 
 const taskBody = z.object({
-  title: z.string().trim().min(3).max(200),
+  title: z.string().trim().min(3).max(200).regex(/\p{L}/u, 'Название должно содержать буквы, а не только цифры и символы'),
   description: z.string().max(5000).default(''),
   priority: z.number().int().min(1).max(4).default(3),
   estimateHours: z.number().positive().max(1000),
   deadline: dateSchema.nullable().optional(),
-  requirements: z.array(reqSchema).max(10).default([]),
+  requirements: z
+    .array(reqSchema)
+    .max(10)
+    .refine((a) => new Set(a.map((r) => r.skillId)).size === a.length, 'Один и тот же навык указан дважды')
+    .default([]),
 });
 
 const weightsBody = z.object({
@@ -65,9 +143,21 @@ export async function buildApp(opts: AppOptions): Promise<FastifyInstance> {
   await app.register(cors, { origin: true });
   await app.register(jwt, { secret: opts.jwtSecret ?? process.env.JWT_SECRET ?? 'dev-secret-change-me', sign: { expiresIn: '12h' } });
 
-  app.setErrorHandler((err: Error & { statusCode?: number; validation?: unknown }, _req, reply) => {
+  /** Проверка ссылок на навыки: несуществующий навык даёт понятную ошибку 400, а не внутреннюю ошибку сервера. */
+  const assertSkillsExist = (ids: number[], label: string) => {
+    for (const id of ids) {
+      if (!repo.get('SELECT id FROM skills WHERE id = ?', id)) throw new ValidationFailure([`${label}: выбран несуществующий навык`]);
+    }
+  };
+
+  app.setErrorHandler((err: Error & { statusCode?: number; validation?: unknown }, req, reply) => {
+    if (err instanceof ValidationFailure) return reply.code(400).send({ error: 'Ошибка валидации', details: err.details });
     if (err instanceof z.ZodError) {
-      return reply.code(400).send({ error: 'Ошибка валидации', details: err.issues.map((i) => `${i.path.join('.')}: ${i.message}`) });
+      return reply.code(400).send({ error: 'Ошибка валидации', details: err.issues.map((i) => {
+          const key = String(i.path.filter((p) => typeof p === 'string').pop() ?? '');
+          const labels = req.url.startsWith('/api/skills') ? { ...FIELD_LABELS, name: 'Название навыка', category: 'Категория' } : FIELD_LABELS;
+          return key ? `${labels[key] ?? key}: ${i.message}` : i.message;
+        }) });
     }
     const status = err.statusCode ?? 500;
     if (status >= 500) app.log.error(err);
@@ -138,7 +228,7 @@ export async function buildApp(opts: AppOptions): Promise<FastifyInstance> {
 
   // ---------- Вход ----------
   app.post('/api/auth/login', async (req, reply) => {
-    const body = z.object({ email: z.string().email(), password: z.string().min(1) }).parse(req.body);
+    const body = z.object({ email: z.string().max(254).email(), password: z.string().min(1).max(200) }).parse(req.body);
     const emp = repo.get<EmployeeRow>('SELECT * FROM employees WHERE email = ?', body.email.toLowerCase());
     if (!emp || !(await verifyPassword(body.password, emp.password_hash))) {
       return reply.code(401).send({ error: 'Неверный адрес почты или пароль' });
@@ -171,15 +261,40 @@ export async function buildApp(opts: AppOptions): Promise<FastifyInstance> {
     repo.all<EmployeeRow>('SELECT * FROM employees ORDER BY name').map(publicEmployee),
   );
 
+  app.get('/api/employees/:id', { preHandler: authenticate }, async (req, reply) => {
+    const { id } = idParam.parse(req.params);
+    const row = repo.get<EmployeeRow>('SELECT * FROM employees WHERE id = ?', id);
+    if (!row) return reply.code(404).send({ error: 'Сотрудник не найден' });
+    return publicEmployee(row);
+  });
+
   app.post('/api/employees', { preHandler: admin }, async (req, reply) => {
     const b = z
       .object({
-        name: z.string().trim().min(2).max(120),
+        name: z
+          .string()
+          .trim()
+          .min(5, 'ФИО слишком короткое')
+          .max(120)
+          .regex(/^[\p{L}][\p{L}'’-]*(\s+[\p{L}][\p{L}'’-]*)+$/u, 'Укажите фамилию и имя (и отчество) только буквами; допускаются дефис и апостроф'),
         email: z.string().email(),
-        password: z.string().min(8).max(100),
+        password: z
+          .string()
+          .min(8)
+          .max(100)
+          .refine((v) => /\p{L}/u.test(v) && /\d/.test(v), 'Пароль должен содержать буквы и цифры'),
         role: z.enum(['admin', 'manager', 'employee']).default('employee'),
-        position: z.string().max(120).default(''),
-        capacityHoursWeek: z.number().positive().max(80).default(40),
+        position: z.string().trim().min(2, 'Укажите должность').max(120),
+        capacityHoursWeek: z.number().min(1).max(80).default(40),
+        noPatronymic: z.boolean().default(false),
+      })
+      .superRefine((v, ctx) => {
+        const parts = v.name.split(/\s+/).filter(Boolean).length;
+        if (!v.noPatronymic && parts < 3) {
+          ctx.addIssue({ code: 'custom', path: ['name'], message: 'Укажите фамилию, имя и отчество или отметьте «Без отчества»' });
+        } else if (v.noPatronymic && parts !== 2) {
+          ctx.addIssue({ code: 'custom', path: ['name'], message: 'При отметке «Без отчества» укажите только фамилию и имя' });
+        }
       })
       .parse(req.body);
     if (repo.get('SELECT id FROM employees WHERE email = ?', b.email.toLowerCase())) {
@@ -202,14 +317,18 @@ export async function buildApp(opts: AppOptions): Promise<FastifyInstance> {
     const { id } = idParam.parse(req.params);
     const b = z
       .object({
-        position: z.string().max(120).optional(),
-        capacityHoursWeek: z.number().positive().max(80).optional(),
+        position: z.string().trim().min(2, 'Укажите должность').max(120).optional(),
+        capacityHoursWeek: z.number().min(1).max(80).optional(),
         available: z.boolean().optional(),
-        skills: z.array(z.object({ skillId: z.number().int().positive(), level: z.number().int().min(1).max(5) })).optional(),
+        skills: z
+          .array(z.object({ skillId: z.number().int().positive(), level: z.number().int().min(1).max(5) }))
+          .refine((a) => new Set(a.map((s) => s.skillId)).size === a.length, 'Один и тот же навык указан дважды')
+          .optional(),
       })
       .parse(req.body);
     const cur = repo.get<EmployeeRow>('SELECT * FROM employees WHERE id = ?', id);
     if (!cur) return reply.code(404).send({ error: 'Сотрудник не найден' });
+    assertSkillsExist(b.skills?.map((s) => s.skillId) ?? [], 'Навыки');
     tx(opts.db, () => {
       if (b.position !== undefined) repo.run('UPDATE employees SET position = ? WHERE id = ?', b.position, id);
       if (b.capacityHoursWeek !== undefined) repo.run('UPDATE employees SET capacity_hours_week = ? WHERE id = ?', b.capacityHoursWeek, id);
@@ -237,13 +356,17 @@ export async function buildApp(opts: AppOptions): Promise<FastifyInstance> {
     if (q.status) (where.push('status = ?'), params.push(q.status));
     if (q.assignee) (where.push('assignee_id = ?'), params.push(q.assignee));
     if (q.unassigned) where.push('assignee_id IS NULL');
-    if (q.q) (where.push('(title LIKE ? OR description LIKE ?)'), params.push(`%${q.q}%`, `%${q.q}%`));
     const sql = `SELECT * FROM tasks ${where.length ? 'WHERE ' + where.join(' AND ') : ''} ORDER BY priority, COALESCE(deadline, '9999-12-31'), id`;
-    return repo.all<TaskRow>(sql, ...params).map((t) => publicTask(t));
+    const tasks = repo.all<TaskRow>(sql, ...params).map((t) => publicTask(t));
+    // Поиск без учёта регистра по названию, описанию, исполнителю и навыкам (SQLite LIKE не различает регистр только для латиницы)
+    const needle = q.q?.trim().toLocaleLowerCase('ru');
+    if (!needle) return tasks;
+    return tasks.filter((t) => [t.title, t.description, t.assigneeName ?? '', ...(t.requirements ?? []).map((r) => r.name)].join('\n').toLocaleLowerCase('ru').includes(needle));
   });
 
   app.post('/api/tasks', { preHandler: manager }, async (req, reply) => {
     const b = taskBody.parse(req.body);
+    assertSkillsExist(b.requirements.map((r) => r.skillId), 'Требования к навыкам');
     const id = tx(opts.db, () => {
       const r = repo.run(
         'INSERT INTO tasks(title, description, priority, estimate_hours, deadline, created_by) VALUES(?,?,?,?,?,?)',
@@ -279,6 +402,7 @@ export async function buildApp(opts: AppOptions): Promise<FastifyInstance> {
     const b = taskBody.partial().parse(req.body);
     const t = repo.get<TaskRow>('SELECT * FROM tasks WHERE id = ?', id);
     if (!t) return reply.code(404).send({ error: 'Задача не найдена' });
+    assertSkillsExist(b.requirements?.map((r) => r.skillId) ?? [], 'Требования к навыкам');
     tx(opts.db, () => {
       repo.run(
         'UPDATE tasks SET title = ?, description = ?, priority = ?, estimate_hours = ?, deadline = ? WHERE id = ?',
@@ -310,6 +434,9 @@ export async function buildApp(opts: AppOptions): Promise<FastifyInstance> {
     if (!t) return reply.code(404).send({ error: 'Задача не найдена' });
     if (req.user.role === 'employee' && t.assignee_id !== req.user.id) {
       return reply.code(403).send({ error: 'Исполнитель может менять статус только своих задач' });
+    }
+    if (b.status === 'new' && t.assignee_id != null) {
+      return reply.code(409).send({ error: 'Задача с исполнителем не может вернуться в статус «Новая». Выберите другого исполнителя в карточке задачи' });
     }
     if (b.status !== 'new' && t.assignee_id == null) {
       return reply.code(409).send({ error: 'Сначала необходимо назначить исполнителя' });
@@ -356,7 +483,7 @@ export async function buildApp(opts: AppOptions): Promise<FastifyInstance> {
   app.post('/api/assign/batch', { preHandler: manager }, async (req) => {
     const b = z
       .object({
-        taskIds: z.array(z.number().int().positive()).optional(),
+        taskIds: z.array(z.number().int().positive()).max(500).optional(),
         mode: z.enum(['optimal', 'greedy']).default('optimal'),
         apply: z.boolean().default(false),
       })

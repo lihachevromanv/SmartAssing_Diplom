@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { useAuth } from '../auth.tsx';
+import Field, { EMAIL_RE, PasswordInput, sanitizeEmail, useTouched } from '../components/Field.tsx';
 
 const DEMO = [
   { label: 'Руководитель', email: 'manager@smartassign.local', password: 'Manager#2025' },
@@ -13,6 +14,9 @@ export default function Login() {
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
+  const tc = useTouched();
+  const emailErr = email.trim() === '' ? 'Введите адрес электронной почты' : !EMAIL_RE.test(email.trim()) ? 'Некорректный адрес. Пример: name@company.ru' : undefined;
+  const passErr = password === '' ? 'Введите пароль' : undefined;
 
   const submit = async (e: string, p: string) => {
     setBusy(true);
@@ -30,9 +34,12 @@ export default function Login() {
     <div className="login-page">
       <form
         className="login-card"
+        noValidate
         onSubmit={(e) => {
           e.preventDefault();
-          submit(email, password);
+          tc.submit();
+          if (emailErr || passErr) return;
+          submit(email.trim(), password);
         }}
       >
         <div className="brand brand-lg">
@@ -40,14 +47,12 @@ export default function Login() {
           <span>SmartAssign</span>
         </div>
         <p className="muted">Интеллектуальная система распределения задач сотрудникам</p>
-        <label>
-          Электронная почта
-          <input type="email" required autoComplete="username" value={email} onChange={(e) => setEmail(e.target.value)} />
-        </label>
-        <label>
-          Пароль
-          <input type="password" required autoComplete="current-password" value={password} onChange={(e) => setPassword(e.target.value)} />
-        </label>
+        <Field label="Электронная почта" error={tc.show('email', emailErr)}>
+          <input type="email" autoComplete="username" value={email} onChange={(e) => setEmail(sanitizeEmail(e.target.value))} onBlur={() => tc.touch('email')} aria-invalid={!!tc.show('email', emailErr)} />
+        </Field>
+        <Field label="Пароль" error={tc.show('password', passErr)}>
+          <PasswordInput autoComplete="current-password" value={password} onChange={setPassword} onBlur={() => tc.touch('password')} invalid={!!tc.show('password', passErr)} />
+        </Field>
         {error && <div className="alert alert-error">{error}</div>}
         <button className="btn btn-primary btn-block" disabled={busy}>
           Войти

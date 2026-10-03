@@ -7,6 +7,7 @@ import Dashboard from './pages/Dashboard.tsx';
 import Distribution from './pages/Distribution.tsx';
 import Experiment from './pages/Experiment.tsx';
 import Login from './pages/Login.tsx';
+import Person from './pages/Person.tsx';
 import Settings from './pages/Settings.tsx';
 import Tasks from './pages/Tasks.tsx';
 import Team from './pages/Team.tsx';
@@ -22,6 +23,7 @@ export default function App() {
         <Route path="tasks" element={<Tasks />} />
         <Route path="board" element={<Board />} />
         <Route path="team" element={<Team />} />
+        <Route path="team/:id" element={<Person />} />
         {isManager && (
           <>
             <Route path="distribution" element={<Distribution />} />

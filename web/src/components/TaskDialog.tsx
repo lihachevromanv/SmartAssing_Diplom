@@ -1,14 +1,21 @@
+import { useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from '../api.ts';
 import { useAuth } from '../auth.tsx';
 import { useToast } from '../toast.tsx';
 import { CRITERIA_LABELS, STATUSES, STATUS_LABELS, type Candidate, type Components, type Task, type TaskDetails, type TaskStatus, type Weights } from '../types.ts';
+import { useConfirm } from './Confirm.tsx';
+import Field, { normalizeDecimal, parseNumber, sanitizeDecimal, useTouched } from './Field.tsx';
+import TaskForm from './TaskForm.tsx';
 import { ContributionBar, formatDate, Legend, Modal, PriorityBadge, Spinner, StatusBadge } from './ui.tsx';
 
 export default function TaskDialog({ taskId, onClose }: { taskId: number; onClose: () => void }) {
   const qc = useQueryClient();
   const toast = useToast();
   const { user, isManager } = useAuth();
+  const confirm = useConfirm();
+  const [editing, setEditing] = useState(false);
+  const [finishing, setFinishing] = useState(false);
   const { data: task } = useQuery({ queryKey: ['task', taskId], queryFn: () => api<TaskDetails>(`/tasks/${taskId}`) });
   const { data: rec, isFetching: recLoading } = useQuery({
     queryKey: ['recommend', taskId, task?.assigneeId, task?.status],
@@ -41,13 +48,31 @@ export default function TaskDialog({ taskId, onClose }: { taskId: number; onClos
     onError,
   });
 
+  const remove = useMutation({
+    mutationFn: () => api(`/tasks/${taskId}`, { method: 'DELETE' }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['tasks'] });
+      qc.invalidateQueries({ queryKey: ['dashboard'] });
+      qc.invalidateQueries({ queryKey: ['employees'] });
+      toast('Задача удалена');
+      onClose();
+    },
+    onError,
+  });
+
+  const askRemove = async () => {
+    const ok = await confirm({
+      title: 'Удалить задачу?',
+      message: `Задача «${task?.title}» и вся её история будут удалены без возможности восстановления.`,
+      confirmText: 'Удалить',
+      danger: true,
+    });
+    if (ok) remove.mutate();
+  };
+
   const changeStatus = (status: TaskStatus) => {
-    if (status === 'done') {
-      const input = window.prompt('Фактические трудозатраты, ч (пусто — по оценке):', String(task?.estimateHours ?? ''));
-      if (input === null) return;
-      const n = Number(input.replace(',', '.'));
-      setStatus.mutate({ status, actualHours: input.trim() && n > 0 ? n : undefined });
-    } else setStatus.mutate({ status });
+    if (status === 'done') setFinishing(true);
+    else setStatus.mutate({ status });
   };
 
   if (!task) {
@@ -63,55 +88,91 @@ export default function TaskDialog({ taskId, onClose }: { taskId: number; onClos
 
   return (
     <Modal title={`Задача №${task.id}`} onClose={onClose} wide>
-      <div className="task-head">
-        <h3>{task.title}</h3>
+      <header className="td-top">
+        <h3 className="td-title">{task.title}</h3>
         <div className="row-gap">
           <PriorityBadge p={task.priority} />
           <StatusBadge s={task.status} />
           {task.overdue && <span className="badge badge-danger">Просрочена</span>}
         </div>
-        {task.description && <p className="muted">{task.description}</p>}
-        <dl className="facts">
-          <div>
-            <dt>Трудоёмкость</dt>
-            <dd>{task.estimateHours} ч</dd>
-          </div>
-          <div>
-            <dt>Срок</dt>
-            <dd>{formatDate(task.deadline)}</dd>
-          </div>
-          <div>
-            <dt>Исполнитель</dt>
-            <dd>{task.assigneeName ?? 'не назначен'}</dd>
-          </div>
-          <div>
-            <dt>Способ назначения</dt>
-            <dd>{task.assignedBy ? { manual: 'вручную', auto: 'автоматически', batch: 'пакетно' }[task.assignedBy] : '—'}</dd>
-          </div>
-        </dl>
-        <div className="chips">
+        {task.description && <p className="td-desc">{task.description}</p>}
+      </header>
+
+      <div className="td-facts">
+        <div className="td-fact">
+          <span className="td-fact-label">Трудоёмкость</span>
+          <span className="td-fact-value">{task.estimateHours} ч</span>
+        </div>
+        <div className="td-fact">
+          <span className="td-fact-label">Срок</span>
+          <span className={`td-fact-value ${task.overdue ? 'danger' : ''}`}>{formatDate(task.deadline)}</span>
+        </div>
+        <div className="td-fact">
+          <span className="td-fact-label">Исполнитель</span>
+          <span className="td-fact-value">{task.assigneeName ?? 'не назначен'}</span>
+        </div>
+        <div className="td-fact">
+          <span className="td-fact-label">Способ назначения</span>
+          <span className="td-fact-value">{task.assignedBy ? { manual: 'вручную', auto: 'автоматически', batch: 'пакетно' }[task.assignedBy] : '—'}</span>
+        </div>
+      </div>
+
+      <section className="td-block">
+        <h4 className="td-label">Требуемые навыки</h4>
+        <div className="chips chips-flush">
           {task.requirements.length === 0 && <span className="muted">Специальных требований к навыкам нет</span>}
           {task.requirements.map((r) => (
             <span key={r.skillId} className="chip">
-              {r.name} ≥ {r.minLevel}
+              {r.name} <b>≥ {r.minLevel}</b>
             </span>
           ))}
         </div>
-        {canChangeStatus && task.assigneeId && (
-          <div className="status-actions">
-            {STATUSES.filter((s) => s !== 'new').map((s) => (
-              <button key={s} className={`btn btn-sm ${task.status === s ? 'btn-primary' : 'btn-ghost'}`} disabled={task.status === s || setStatus.isPending} onClick={() => changeStatus(s)}>
-                {STATUS_LABELS[s]}
-              </button>
-            ))}
-          </div>
-        )}
-      </div>
+      </section>
+
+      {((canChangeStatus && task.assigneeId) || isManager) && (
+        <section className="td-panel">
+          {canChangeStatus && task.assigneeId && (
+            <div className="td-row">
+              <h4 className="td-label">Статус задачи</h4>
+              <ol className="stepper">
+                {STATUSES.filter((st) => st !== 'new').map((st, i, arr) => {
+                  const cur = (arr as TaskStatus[]).indexOf(task.status);
+                  const state = i === cur ? 'current' : i < cur ? 'passed' : 'next';
+                  return (
+                    <li key={st}>
+                      <button className={`step step-${state}`} disabled={st === task.status || setStatus.isPending} onClick={() => changeStatus(st)} aria-current={state === 'current'}>
+                        <span className="step-num">{state === 'passed' ? '✓' : i + 1}</span>
+                        {STATUS_LABELS[st]}
+                      </button>
+                    </li>
+                  );
+                })}
+              </ol>
+            </div>
+          )}
+          {isManager && (
+            <div className="td-row">
+              <h4 className="td-label">Действия с задачей</h4>
+              <div className="row-gap">
+                <button className="btn btn-ghost btn-sm" onClick={() => setEditing(true)}>
+                  ✎ Изменить
+                </button>
+                <button className="btn btn-ghost btn-sm btn-danger-outline" onClick={askRemove} disabled={remove.isPending}>
+                  🗑 Удалить
+                </button>
+              </div>
+            </div>
+          )}
+        </section>
+      )}
 
       {task.status !== 'done' && (
-        <section className="section">
+        <section className="td-section">
           <div className="section-head">
-            <h3>Рекомендации по назначению</h3>
+            <div>
+              <h4 className="td-heading">Рекомендации по назначению</h4>
+              <p className="td-hint">Чем выше оценка, тем лучше сотрудник подходит для задачи. Цветная полоса показывает вклад критериев.</p>
+            </div>
             {isManager && (
               <button className="btn btn-primary btn-sm" onClick={() => auto.mutate()} disabled={auto.isPending}>
                 Назначить лучшего
@@ -138,10 +199,11 @@ export default function TaskDialog({ taskId, onClose }: { taskId: number; onClos
                 </thead>
                 <tbody>
                   {rec?.candidates.map((c, i) => (
-                    <tr key={c.employeeId} className={c.feasible ? '' : 'row-muted'}>
+                    <tr key={c.employeeId} className={`${c.feasible ? '' : 'row-muted'} ${c.feasible && i === 0 ? 'row-best' : ''} ${c.employeeId === task.assigneeId ? 'row-current' : ''}`}>
                       <td>{c.feasible ? i + 1 : '–'}</td>
                       <td>
-                        {c.name}
+                        <span className="cell-title">{c.name}</span>
+                        {c.feasible && i === 0 && <span className="badge badge-ok ml">лучший</span>}
                         {c.employeeId === task.assigneeId && <span className="badge badge-info ml">текущий</span>}
                         {!c.feasible && <div className="small">{c.reason}</div>}
                       </td>
@@ -180,19 +242,76 @@ export default function TaskDialog({ taskId, onClose }: { taskId: number; onClos
         </section>
       )}
 
-      <section className="section">
-        <h3>История</h3>
-        <ul className="timeline">
+      <section className="td-section">
+        <h4 className="td-heading">История изменений</h4>
+        <ol className="history">
           {task.events.map((ev) => (
             <li key={ev.id}>
-              <time>{new Date(ev.at.replace(' ', 'T') + (ev.at.includes('T') ? '' : 'Z')).toLocaleString('ru-RU')}</time>
-              <span>
-                {ev.details} {ev.actor && <em className="muted">— {ev.actor}</em>}
-              </span>
+              <span className="history-dot" aria-hidden />
+              <div>
+                <div className="history-text">{ev.details}</div>
+                <div className="history-meta">
+                  {new Date(ev.at.replace(' ', 'T') + (ev.at.includes('T') ? '' : 'Z')).toLocaleString('ru-RU')}
+                  {ev.actor && ` · ${ev.actor}`}
+                </div>
+              </div>
             </li>
           ))}
-        </ul>
+        </ol>
       </section>
+      {editing && <TaskForm task={task} onClose={() => setEditing(false)} />}
+      {finishing && (
+        <FinishDialog
+          estimate={task.estimateHours}
+          pending={setStatus.isPending}
+          onClose={() => setFinishing(false)}
+          onSubmit={(actualHours) => setStatus.mutate({ status: 'done', actualHours }, { onSuccess: () => setFinishing(false) })}
+        />
+      )}
+    </Modal>
+  );
+}
+
+/** Окно завершения задачи: ввод фактических трудозатрат с проверкой. */
+function FinishDialog({ estimate, pending, onClose, onSubmit }: { estimate: number; pending: boolean; onClose: () => void; onSubmit: (hours: number | undefined) => void }) {
+  const [value, setValue] = useState(String(estimate));
+  const tc = useTouched();
+  const n = parseNumber(value);
+  const error =
+    value.trim() === ''
+      ? 'Укажите фактические трудозатраты в часах'
+      : n === null || !/^\d+(,\d{1,2})?$/.test(value.trim())
+        ? 'Введите число, например 7,5 (не более двух знаков после запятой)'
+        : n <= 0
+          ? 'Трудозатраты должны быть больше нуля'
+          : n > 2000
+            ? 'Значение не может превышать 2000 часов'
+            : undefined;
+  return (
+    <Modal title="Завершение задачи" onClose={onClose} narrow>
+      <form
+        className="form"
+        noValidate
+        onSubmit={(e) => {
+          e.preventDefault();
+          tc.submit();
+          if (error) return;
+          onSubmit(n ?? undefined);
+        }}
+      >
+        <p className="confirm-text">Укажите, сколько часов фактически заняла работа. Эти данные уточнят скорость исполнителя. Оценка задачи – {estimate} ч.</p>
+        <Field label="Фактические трудозатраты, ч (обязательно)" error={tc.show('hours', error)}>
+          <input inputMode="decimal" value={value} onChange={(e) => setValue(sanitizeDecimal(e.target.value))} onBlur={() => (setValue(normalizeDecimal(value)), tc.touch('hours'))} aria-invalid={!!tc.show('hours', error)} autoFocus />
+        </Field>
+        <div className="form-actions">
+          <button type="button" className="btn btn-ghost" onClick={onClose}>
+            Отмена
+          </button>
+          <button className="btn btn-primary" disabled={pending}>
+            Завершить задачу
+          </button>
+        </div>
+      </form>
     </Modal>
   );
 }

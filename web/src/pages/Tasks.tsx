@@ -1,5 +1,5 @@
-import { useState } from 'react';
-import { useQuery } from '@tanstack/react-query';
+import { useEffect, useState } from 'react';
+import { keepPreviousData, useQuery } from '@tanstack/react-query';
 import { api } from '../api.ts';
 import { useAuth } from '../auth.tsx';
 import TaskDialog from '../components/TaskDialog.tsx';
@@ -10,6 +10,7 @@ import { STATUSES, STATUS_LABELS, type Task } from '../types.ts';
 export default function Tasks() {
   const { isManager, user } = useAuth();
   const [status, setStatus] = useState('');
+  const [input, setInput] = useState('');
   const [q, setQ] = useState('');
   const [mine, setMine] = useState(false);
   const [openId, setOpenId] = useState<number | null>(null);
@@ -19,7 +20,17 @@ export default function Tasks() {
   if (status) params.set('status', status);
   if (q) params.set('q', q);
   if (mine && user) params.set('assignee', String(user.id));
-  const { data, isLoading } = useQuery({ queryKey: ['tasks', status, q, mine], queryFn: () => api<Task[]>(`/tasks?${params}`) });
+  // Поиск применяется после паузы в наборе или сразу по нажатию Enter; прежний список остаётся на экране, пока грузится новый
+  useEffect(() => {
+    const t = setTimeout(() => setQ(input.trim()), 450);
+    return () => clearTimeout(t);
+  }, [input]);
+
+  const { data, isLoading, isFetching } = useQuery({
+    queryKey: ['tasks', status, q, mine],
+    queryFn: () => api<Task[]>(`/tasks?${params}`),
+    placeholderData: keepPreviousData,
+  });
 
   return (
     <>
@@ -36,7 +47,15 @@ export default function Tasks() {
       </header>
 
       <div className="toolbar">
-        <input type="search" placeholder="Поиск по названию…" value={q} onChange={(e) => setQ(e.target.value)} aria-label="Поиск" />
+        <input
+          type="search"
+          placeholder="Поиск: название, описание, исполнитель, навык…"
+          value={input}
+          maxLength={100}
+          onChange={(e) => setInput(e.target.value)}
+          onKeyDown={(e) => e.key === 'Enter' && setQ(input.trim())}
+          aria-label="Поиск по задачам"
+        />
         <select value={status} onChange={(e) => setStatus(e.target.value)} aria-label="Статус">
           <option value="">Все статусы</option>
           {STATUSES.map((s) => (
@@ -55,7 +74,7 @@ export default function Tasks() {
       ) : !data?.length ? (
         <Empty>Задачи не найдены</Empty>
       ) : (
-        <div className="table-wrap card-flush">
+        <div className={`table-wrap card-flush ${isFetching ? 'is-fetching' : ''}`}>
           <table className="table table-hover">
             <thead>
               <tr>

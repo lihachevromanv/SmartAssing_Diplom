@@ -1,15 +1,24 @@
 import { useEffect, type ReactNode } from 'react';
+import { createPortal } from 'react-dom';
 import { CRITERIA_LABELS, PRIORITY_LABELS, STATUS_LABELS, type Components, type TaskStatus } from '../types.ts';
 
-export function Modal({ title, onClose, children, wide }: { title: string; onClose: () => void; children: ReactNode; wide?: boolean }) {
+const modalStack: symbol[] = [];
+
+export function Modal({ title, onClose, children, wide, narrow }: { title: string; onClose: () => void; children: ReactNode; wide?: boolean; narrow?: boolean }) {
+  // Esc закрывает только верхнее из открытых окон
   useEffect(() => {
-    const onKey = (e: KeyboardEvent) => e.key === 'Escape' && onClose();
+    const id = Symbol('modal');
+    modalStack.push(id);
+    const onKey = (e: KeyboardEvent) => e.key === 'Escape' && modalStack[modalStack.length - 1] === id && onClose();
     window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
+    return () => {
+      window.removeEventListener('keydown', onKey);
+      modalStack.splice(modalStack.indexOf(id), 1);
+    };
   }, [onClose]);
-  return (
+  return createPortal(
     <div className="overlay" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
-      <div className={`modal ${wide ? 'modal-wide' : ''}`} role="dialog" aria-modal="true" aria-label={title}>
+      <div className={`modal ${wide ? 'modal-wide' : ''} ${narrow ? 'modal-narrow' : ''}`} role="dialog" aria-modal="true" aria-label={title}>
         <header className="modal-head">
           <h2>{title}</h2>
           <button className="icon-btn" onClick={onClose} aria-label="Закрыть">
@@ -18,7 +27,8 @@ export function Modal({ title, onClose, children, wide }: { title: string; onClo
         </header>
         <div className="modal-body">{children}</div>
       </div>
-    </div>
+    </div>,
+    document.body,
   );
 }
 

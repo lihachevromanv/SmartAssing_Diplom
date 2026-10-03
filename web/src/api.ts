@@ -18,9 +18,11 @@ export const setToken = (t: string | null) => {
 
 export class ApiError extends Error {
   status: number;
-  constructor(message: string, status: number) {
+  details: string[];
+  constructor(message: string, status: number, details: string[] = []) {
     super(message);
     this.status = status;
+    this.details = details;
   }
 }
 
@@ -42,7 +44,7 @@ export async function api<T>(path: string, options: { method?: string; body?: un
       window.dispatchEvent(new Event('smartassign:logout'));
     }
     const details = Array.isArray(data.details) ? `: ${data.details.join('; ')}` : '';
-    throw new ApiError((data.error ?? 'Ошибка запроса') + details, res.status);
+    throw new ApiError((data.error ?? 'Ошибка запроса') + details, res.status, Array.isArray(data.details) ? data.details : []);
   }
   return data as T;
 }

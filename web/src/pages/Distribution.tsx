@@ -50,7 +50,7 @@ export default function Distribution() {
             </div>
           </label>
         </div>
-        <button className="btn btn-primary" onClick={() => build.mutate()} disabled={build.isPending}>
+        <button className="btn btn-primary btn-run" onClick={() => build.mutate()} disabled={build.isPending}>
           Построить план
         </button>
       </section>

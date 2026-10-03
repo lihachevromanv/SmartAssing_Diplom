@@ -30,7 +30,9 @@ export default function Settings() {
 
   if (!w) return null;
   const keys = Object.keys(CRITERIA_LABELS) as (keyof Components)[];
-  const sum = keys.reduce((s, k) => s + w[k], 0) || 1;
+  const rawSum = keys.reduce((s, k) => s + w[k], 0);
+  const sum = rawSum || 1;
+  const zeroError = rawSum <= 0 ? 'Хотя бы один вес должен быть больше нуля' : undefined;
 
   return (
     <>
@@ -54,11 +56,16 @@ export default function Settings() {
             </div>
           ))}
         </div>
+        {zeroError && (
+          <p className="field-error" role="alert">
+            {zeroError}
+          </p>
+        )}
         <div className="form-actions">
           <button className="btn btn-ghost" onClick={() => data && setW(data)}>
             Сбросить
           </button>
-          <button className="btn btn-primary" onClick={() => save.mutate(w)} disabled={save.isPending}>
+          <button className="btn btn-primary" onClick={() => (zeroError ? toast(zeroError, 'error') : save.mutate(w))} disabled={save.isPending}>
             Сохранить
           </button>
         </div>

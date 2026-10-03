@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { useMutation } from '@tanstack/react-query';
 import { api } from '../api.ts';
+import Field, { parseNumber, sanitizeInt, useTouched } from '../components/Field.tsx';
 import { useToast } from '../toast.tsx';
 import type { SimMetrics, SimulationResult } from '../types.ts';
 
@@ -40,11 +41,20 @@ function Chart({ data, metric }: { data: SimulationResult; metric: (typeof METRI
 
 export default function Experiment() {
   const toast = useToast();
-  const [employees, setEmployees] = useState(12);
-  const [tasks, setTasks] = useState(60);
-  const [runs, setRuns] = useState(20);
+  const [employees, setEmployees] = useState('12');
+  const [tasks, setTasks] = useState('60');
+  const [runs, setRuns] = useState('20');
+  const tc = useTouched();
+  const check = (raw: string, min: number, max: number, what: string) => {
+    const n = parseNumber(raw);
+    if (raw.trim() === '') return `Укажите ${what}`;
+    if (n === null || !Number.isInteger(n)) return 'Введите целое число';
+    if (n < min || n > max) return `Допустимо от ${min} до ${max}`;
+    return undefined;
+  };
+  const errs = { employees: check(employees, 3, 60, 'число сотрудников'), tasks: check(tasks, 5, 300, 'число задач'), runs: check(runs, 1, 50, 'число прогонов') };
   const run = useMutation({
-    mutationFn: () => api<SimulationResult>('/simulation', { body: { employees, tasks, runs, seed: 2025 } }),
+    mutationFn: () => api<SimulationResult>('/simulation', { body: { employees: Number(employees), tasks: Number(tasks), runs: Number(runs), seed: 2025 } }),
     onError: (e: Error) => toast(e.message, 'error'),
   });
 
@@ -56,20 +66,21 @@ export default function Experiment() {
       </header>
       <section className="card">
         <div className="grid-3">
-          <label>
-            Сотрудников
-            <input type="number" min={3} max={60} value={employees} onChange={(e) => setEmployees(Number(e.target.value))} />
-          </label>
-          <label>
-            Задач
-            <input type="number" min={5} max={300} value={tasks} onChange={(e) => setTasks(Number(e.target.value))} />
-          </label>
-          <label>
-            Прогонов
-            <input type="number" min={1} max={50} value={runs} onChange={(e) => setRuns(Number(e.target.value))} />
-          </label>
+          <Field label="Сотрудников (от 3 до 60)" error={tc.show('employees', errs.employees)}>
+            <input inputMode="numeric" value={employees} onChange={(e) => setEmployees(sanitizeInt(e.target.value, 3))} onBlur={() => tc.touch('employees')} aria-invalid={!!tc.show('employees', errs.employees)} />
+          </Field>
+          <Field label="Задач (от 5 до 300)" error={tc.show('tasks', errs.tasks)}>
+            <input inputMode="numeric" value={tasks} onChange={(e) => setTasks(sanitizeInt(e.target.value, 3))} onBlur={() => tc.touch('tasks')} aria-invalid={!!tc.show('tasks', errs.tasks)} />
+          </Field>
+          <Field label="Прогонов (от 1 до 50)" error={tc.show('runs', errs.runs)}>
+            <input inputMode="numeric" value={runs} onChange={(e) => setRuns(sanitizeInt(e.target.value, 3))} onBlur={() => tc.touch('runs')} aria-invalid={!!tc.show('runs', errs.runs)} />
+          </Field>
         </div>
-        <button className="btn btn-primary" onClick={() => run.mutate()} disabled={run.isPending}>
+        <button className="btn btn-primary btn-run" onClick={() => {
+            tc.submit();
+            if (Object.values(errs).some(Boolean)) return toast('Проверьте параметры эксперимента', 'error');
+            run.mutate();
+          }} disabled={run.isPending}>
           {run.isPending ? 'Расчёт…' : 'Запустить эксперимент'}
         </button>
       </section>
